@@ -7,8 +7,8 @@ from telebot import types
 from config import TELEGRAM_TOKEN, ADMIN_ID
 
 # בדיקה אם הסביבה היא Render
-IS_RENDER = os.environ.get('RENDER', False)
-PORT = int(os.environ.get('PORT', 5000))
+IS_RENDER = os.environ.get('RENDER', 'False').lower() == 'true'
+PORT = int(os.environ.get('PORT', 10000))  # שינוי ברירת המחדל ל-10000 (נפוץ ב-Render)
 WEBHOOK_URL = os.environ.get('WEBHOOK_URL', None)
 
 # ייבוא נוסף של מודולים מקומיים
@@ -21,9 +21,6 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # יצירת מופעי השירותים
 db = DBManager()
 ocr_service = OCRService()
-
-# תמיכה בתמונות צומצמה לגרסה הבסיסית
-temp_images = {}
 
 # מנגנון שמירה על עירנות לסביבת Render
 def setup_keep_alive(app_url=None):
@@ -172,8 +169,11 @@ def handle_photo(message):
         # הורדת התמונה
         downloaded_file = bot.download_file(file_info.file_path)
         
+        # וידוא שתיקיית הנתונים קיימת
+        os.makedirs('data', exist_ok=True)
+        
         # שמירת התמונה בזיכרון זמני
-        image_path = f"temp_{message.message_id}.jpg"
+        image_path = f"data/temp_{message.message_id}.jpg"
         with open(image_path, 'wb') as new_file:
             new_file.write(downloaded_file)
         
@@ -184,15 +184,16 @@ def handle_photo(message):
         # חילוץ מספרי לוחיות
         plate_numbers = ocr_service.extract_plate_numbers(ocr_result)
         
-        # שמירת התמונה ונתוני הזיהוי לשימוש בעתיד
-        temp_images[message.message_id] = {
-            'image_path': image_path,
-            'plate_numbers': plate_numbers,
-            'user_id': message.from_user.id,
-            'username': message.from_user.first_name,
-            'current_number': current_number,
-            'group_id': group_id
-        }
+        # שמירת התמונה ונתוני הזיהוי במסד הנתונים
+        db.save_temp_image(
+            message_id=message.message_id,
+            image_path=image_path,
+            user_id=message.from_user.id,
+            username=message.from_user.first_name,
+            current_number=current_number,
+            group_id=group_id,
+            plate_numbers=plate_numbers
+        )
         
         # בדיקה אם המספר המבוקש נמצא
         current_number_str = str(current_number).zfill(3)
@@ -204,7 +205,7 @@ def handle_photo(message):
             bot.delete_message(group_id, loading_message.message_id)
             
             # סימון המספר כנמצא ובחירת מספר חדש
-            next_number = db.mark_number_as_found(group_id, current_number)
+            next_number = db.mark_number_as_found(group_id, current_number, message.from_user.id)
             
             # שליחת הודעת הצלחה
             success_message = (
@@ -241,7 +242,7 @@ def handle_photo(message):
                 success_message += "כל המספרים נמצאו! המשחק הסתיים 🎉"
                 bot.reply_to(message, success_message)
         else:
-            print(plate_numbers)
+            print(f"Plate numbers found: {plate_numbers}")
 
             # המספר לא נמצא
             # עדכון הודעת הטעינה
@@ -277,6 +278,7 @@ def handle_photo(message):
             group_id,
             loading_message.message_id
         )
+        print(f"Error processing image: {e}")
     
     finally:
         # ניקוי קבצים זמניים (יתבצע במנגנון ניקוי נפרד במערכת מלאה)
@@ -294,13 +296,14 @@ def handle_admin_actions(call):
     action, message_id = call.data.split('_')
     message_id = int(message_id)
     
+    # קבלת נתוני התמונה
+    image_data = db.get_temp_image(message_id)
+    
     # בדיקה שהנתונים עדיין קיימים
-    if message_id not in temp_images:
+    if not image_data:
         bot.answer_callback_query(call.id, "הנתונים על התמונה הזו כבר לא זמינים.")
         return
     
-    # קבלת נתוני התמונה
-    image_data = temp_images[message_id]
     group_id = image_data['group_id']
     current_number = image_data['current_number']
     username = image_data['username']
@@ -308,7 +311,7 @@ def handle_admin_actions(call):
     if action == 'approve':
         # אישור מציאה שלא זוהתה אוטומטית
         # סימון המספר כנמצא ובחירת מספר חדש
-        next_number = db.mark_number_as_found(group_id, current_number)
+        next_number = db.mark_number_as_found(group_id, current_number, image_data['user_id'])
         
         # שליחת הודעה לקבוצה
         if next_number is not None:
@@ -380,7 +383,7 @@ def handle_admin_actions(call):
     # ניקוי נתוני התמונה
     if os.path.exists(image_data['image_path']):
         os.remove(image_data['image_path'])
-    del temp_images[message_id]
+    db.delete_temp_image(message_id)
 
 def get_game_markup(group_id):
     """יצירת מקלדת אינליין למשחק"""
@@ -426,6 +429,12 @@ def handle_inline_buttons(call):
 def main():
     print("הבוט מופעל...")
     
+    # וידוא שתיקיית הנתונים קיימת
+    os.makedirs('data', exist_ok=True)
+    
+    # ניקוי תמונות זמניות ישנות
+    db.clean_old_temp_images(hours=24)
+    
     try:
         # בחירת מצב הפעלה לפי הסביבה (webhook לרנדר או polling מקומי)
         if IS_RENDER:
@@ -435,13 +444,14 @@ def main():
             if not WEBHOOK_URL:
                 print("אזהרה: WEBHOOK_URL לא מוגדר. ייתכן שהבוט לא יעבוד כראוי.")
                 # השתמש בכתובת ברירת מחדל אם לא הוגדרה
-                webhook_url = f"https://{os.environ.get('RENDER_SERVICE_NAME')}.onrender.com/{TELEGRAM_TOKEN}"
+                service_name = os.environ.get('RENDER_SERVICE_NAME', 'app')
+                webhook_url = f"https://{service_name}.onrender.com/{TELEGRAM_TOKEN}"
             else:
                 webhook_url = WEBHOOK_URL
                 
             # הפעלת מנגנון Keep-Alive עם כתובת ה-webhook
             # הוצא את חלק הנתיב מ-webhook_url כדי לקבל רק את כתובת הבסיס
-            base_url = webhook_url.split('/' + TELEGRAM_TOKEN)[0]
+            base_url = webhook_url.split('/' + TELEGRAM_TOKEN)[0] if TELEGRAM_TOKEN in webhook_url else webhook_url
             print(f"מפעיל מנגנון Keep-Alive עם URL: {base_url}")
             setup_keep_alive(base_url)
             
@@ -468,8 +478,9 @@ def main():
             def index():
                 return "בוט צייד לוחיות רישוי פעיל!"
             
-            # הפעלת שרת
-            app.run(host='0.0.0.0', port=PORT)
+            # הפעלת שרת - שינוי ל-debug=False
+            print(f"מפעיל שרת על פורט {PORT}")
+            app.run(host='0.0.0.0', port=PORT, debug=False)
         else:
             # הפעלה במצב polling (מקומי)
             print("מפעיל במצב polling")
