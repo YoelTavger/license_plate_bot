@@ -1,0 +1,55 @@
+# משתני סביבה
+.env
+.env.*
+
+# קבצים זמניים ונתונים
+data/
+temp*
+*.jpg
+*.jpeg
+*.png
+*.log
+
+# קבצים שנוצרים בזמן ריצה
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE ועורכי קוד
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# מערכת הפעלה
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# קבצי גיבוי
+*.bak
+*.backup

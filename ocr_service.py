@@ -33,7 +33,7 @@ class OCRService:
             # בדיקת תקינות התגובה
             if response.status_code == 200 or response.status_code == 201:  # תגובה תקינה
                 result = response.json()
-                print(result)
+                # print(result)
                 return result
             else:
                     return None
