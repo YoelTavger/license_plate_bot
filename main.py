@@ -4,6 +4,7 @@ import threading
 import requests
 import logging
 from flask import Flask
+import telebot
 from config import IS_RENDER, PORT, WEBHOOK_URL, TELEGRAM_TOKEN, print_config_info
 from bot_handlers import bot, test_bot, db
 
